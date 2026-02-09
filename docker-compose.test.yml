@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Test MongoDB
+  mongodb:
+    image: mongo:6.0
+    container_name: resource-allocation-mongodb-test
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: test_password
+      MONGO_INITDB_DATABASE: test_allocai
+    ports:
+      - "27017:27017"
+    networks:
+      - resource-allocation-test-network
+
+  # Test Redis
+  redis:
+    image: redis:7.0-alpine
+    container_name: resource-allocation-redis-test
+    command: redis-server --requirepass test_password
+    ports:
+      - "6379:6379"
+    networks:
+      - resource-allocation-test-network
+
+  # Test Backend
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: resource-allocation-backend-test
+    environment:
+      NODE_ENV: test
+      PORT: 5000
+      MONGODB_URI: mongodb://admin:test_password@mongodb:27017/test_allocai?authSource=admin
+      REDIS_URL: redis://:test_password@redis:6379
+      JWT_SECRET: test_jwt_secret
+      JWT_REFRESH_SECRET: test_refresh_secret
+      OPENAI_API_KEY: test_openai_key
+      CLIENT_URL: http://localhost:3000
+    networks:
+      - resource-allocation-test-network
+    depends_on:
+      - mongodb
+      - redis
+    command: ["npm", "run", "test:integration"]
+
+networks:
+  resource-allocation-test-network:
+    driver: bridge

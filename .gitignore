@@ -1,0 +1,23 @@
+# Common
+node_modules/
+.env
+.DS_Store
+dist/
+build/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Client specific
+client/node_modules/
+client/dist/
+client/.env
+client/coverage/
+
+# Server specific
+server/node_modules/
+server/dist/
+server/.env
+server/*.log

@@ -1,0 +1,358 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  NODE_VERSION: '18'
+  CACHE_VERSION: v1
+
+jobs:
+  lint:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Cache node modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+            client/node_modules
+            server/node_modules
+          key: ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: |
+          cd client && npm ci
+          cd ../server && npm ci
+
+      - name: Run ESLint (Client)
+        run: |
+          cd client
+          npm run lint
+
+      - name: Run ESLint (Server)
+        run: |
+          cd server
+          npm run lint
+
+      - name: Check Prettier formatting
+        run: |
+          npx prettier --check "client/src/**/*.{ts,tsx,js,jsx}" "server/src/**/*.{ts,js}"
+
+      - name: TypeScript type checking (Client)
+        run: |
+          cd client
+          npx tsc --noEmit
+
+      - name: TypeScript type checking (Server)
+        run: |
+          cd server
+          npx tsc --noEmit
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    
+    services:
+      mongodb:
+        image: mongo:6.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping: 1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7.0
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Cache node modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+            client/node_modules
+            server/node_modules
+          key: ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: |
+          cd client && npm ci
+          cd ../server && npm ci
+
+      - name: Setup test environment
+        run: |
+          cd server
+          cp .env.example .env.test
+          echo "MONGODB_URI=mongodb://localhost:27017/test_allocai" >> .env.test
+          echo "REDIS_URL=redis://localhost:6379" >> .env.test
+          echo "JWT_SECRET=test_jwt_secret" >> .env.test
+          echo "JWT_REFRESH_SECRET=test_refresh_secret" >> .env.test
+          echo "NODE_ENV=test" >> .env.test
+
+      - name: Run client tests
+        run: |
+          cd client
+          npm test -- --coverage --watchAll=false
+
+      - name: Run server tests
+        run: |
+          cd server
+          npm test
+        env:
+          NODE_ENV: test
+          MONGODB_URI: mongodb://localhost:27017/test_allocai
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test_jwt_secret
+          JWT_REFRESH_SECRET: test_refresh_secret
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./client/coverage/lcov.info,./server/coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          cd client && npm ci
+          cd ../server && npm ci
+
+      - name: Run npm audit (Client)
+        run: |
+          cd client
+          npm audit --audit-level=moderate
+
+      - name: Run npm audit (Server)
+        run: |
+          cd server
+          npm audit --audit-level=moderate
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+
+  build:
+    name: Build Applications
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Cache node modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+            client/node_modules
+            server/node_modules
+          key: ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: |
+          cd client && npm ci
+          cd ../server && npm ci
+
+      - name: Build client
+        run: |
+          cd client
+          npm run build
+
+      - name: Build server
+        run: |
+          cd server
+          npm run build
+
+      - name: Upload client build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: client-build
+          path: client/dist/
+          retention-days: 7
+
+      - name: Upload server build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: server-build
+          path: server/dist/
+          retention-days: 7
+
+  docker-build:
+    name: Docker Build Validation
+    runs-on: ubuntu-latest
+    needs: [lint, test, security]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build client Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./client
+          file: ./client/Dockerfile
+          push: false
+          load: true
+          tags: resource-allocation-client:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build server Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          push: false
+          load: true
+          tags: resource-allocation-server:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker images
+        run: |
+          docker images resource-allocation-client:test
+          docker images resource-allocation-server:test
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build, docker-build]
+    
+    services:
+      mongodb:
+        image: mongo:6.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping: 1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7.0
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Start services with Docker Compose
+        run: |
+          docker-compose -f docker-compose.test.yml up -d
+          sleep 30
+
+      - name: Run integration tests
+        run: |
+          docker-compose -f docker-compose.test.yml exec -T server npm run test:integration
+        env:
+          MONGODB_URI: mongodb://localhost:27017/test_allocai
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test_jwt_secret
+          JWT_REFRESH_SECRET: test_refresh_secret
+
+      - name: Cleanup Docker Compose
+        if: always()
+        run: |
+          docker-compose -f docker-compose.test.yml down -v
+          docker system prune -f
+
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [lint, test, security, build, docker-build, integration-test]
+    if: always()
+    
+    steps:
+      - name: Notify success
+        if: ${{ needs.lint.result == 'success' && needs.test.result == 'success' && needs.build.result == 'success' }}
+        run: |
+          echo "✅ All CI checks passed successfully!"
+          echo "Build and tests completed successfully"
+
+      - name: Notify failure
+        if: ${{ needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.build.result == 'failure' }}
+        run: |
+          echo "❌ CI checks failed!"
+          echo "Please check the failed jobs and fix the issues"
+          exit 1
